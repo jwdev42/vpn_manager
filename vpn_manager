@@ -1,0 +1,78 @@
+#! /usr/bin/env bash
+
+#
+# Version 0.1, ©2019 Jörg Walter
+# License: GPL-3
+#
+
+
+VPN_CONF_DIR="/etc/openvpn/pia"
+VPN_AUTH="/etc/openvpn/pia/auth"
+OPENVPN_PID_FILE="/run/openvpn@vpn_manager.pid"
+
+die() {
+	printf "$(tput setaf 1)DIE: $1$(tput sgr0)\n"
+	exit 1
+}
+
+does_user_exist() {
+	#$1 -> user to check
+	local name_grep=$(cut -d ":" -f 1 /etc/passwd | grep "^$1\$")
+	if [ ${#name_grep} -gt 0 ]; then return 0; else return 1; fi
+}
+
+network_setup() {
+
+	test -e /run/netns/vpn && die "vpn namespace already exists!"
+	ip netns add vpn || die "could not create vpn namespace"
+	ip link add name veth1 type veth peer name veth2 || die "could not create veth devices"
+	ip link set veth1 master br0 || die "could not add veth device to bridge"
+	ip link set veth2 netns vpn || die "could not assign veth device to vpn namespace"
+	ip link set veth1 up || die "could not start veth device"
+	echo 1 > /proc/sys/net/ipv6/conf/veth1/disable_ipv6 || die "could not disable ipv6 in veth1 device"
+	ip netns exec vpn ip addr add 192.168.1.16/24 dev veth2 || die "could not assign an IP address to vpn namespace"
+	ip netns exec vpn ip link set veth2 up || die "could not start veth device in vpn namespace"
+	ip netns exec vpn ip link set lo up || die "could not start loopback device in vpn namespace"
+	ip netns exec vpn sysctl -w net.ipv6.conf.all.disable_ipv6=1 || die "could not disable ipv6 in vpn namespace"
+	ip netns exec vpn ip route add default via 192.168.1.254 || die "could not add default route to vpn namespace"
+
+
+}
+
+vpn_setup() {
+	local olddir=`pwd`
+	test -d "$VPN_CONF_DIR" || die "VPN_CONF_DIR \"$VPN_CONF_DIR\" is not a valid directory!"
+	test -f "$VPN_AUTH" || die "VPN_AUTH \"$VPN_AUTH\" is not a file!"
+	cd "$VPN_CONF_DIR" || die "could not change into the VPN configuration directory"
+	select VPN_CONF_FILE in *.ovpn
+	do
+		ip netns exec vpn openvpn --daemon --writepid "$OPENVPN_PID_FILE" --config "$VPN_CONF_FILE" --auth-user-pass "$VPN_AUTH" || die "could not launch openvpn"
+		break
+	done
+	cd "$olddir"
+}
+
+run_in_vpn_as() {
+	#$1 -> user the command will run under
+	#$2 -> command to be run in vpn namespace
+	does_user_exist "$1" || die "user \"$1\" does not exist!"
+	screen ip netns exec vpn runuser -u "$1" "$2"
+}
+
+if [ -f "$OPENVPN_PID_FILE" ]
+	then
+		for i in `pidof openvpn`
+			do
+				if [[ "$i" == $(cat "$OPENVPN_PID_FILE") ]]
+					then
+						run_in_vpn_as "$1" "$2"
+						break
+				fi
+			done
+		
+	else
+		network_setup
+		vpn_setup
+		run_in_vpn_as "$1" "$2"
+fi
+
