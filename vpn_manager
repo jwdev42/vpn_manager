@@ -1,14 +1,24 @@
 #! /usr/bin/env bash
 
 #
-# Version 0.1, ©2019 Jörg Walter
+# Version 0.2, ©2019 Jörg Walter
 # License: GPL-3
 #
 
+rundir="/run/vpn_manager"
+piddir="${rundir}/pid"
 
-VPN_CONF_DIR="/etc/openvpn/pia"
-VPN_AUTH="/etc/openvpn/pia/auth"
-OPENVPN_PID_FILE="/run/openvpn@vpn_manager.pid"
+
+#DO NOT EDIT:
+namespace="" #the network namespace the vpn will run in, mandatory.
+netdev="" #the network bridge's device name, mandatory.
+ip4="" #local IPv4 address for the network namespace, mandatory.
+gw4="" #local IPv4 gateway, mandatory.
+vpnconfig="" #Path to a *.ovpn config file, mandatory.
+vpnauth="" #Path to an auth-user-pass file, mandatory.
+vpndir="" #Directory openvpn will switch to, optional.
+resolvconf="" #Path to a resolv.conf file that will be copied to the network namespace, optional.
+
 
 die() {
 	printf "$(tput setaf 1)DIE: $1$(tput sgr0)\n"
@@ -21,58 +31,291 @@ does_user_exist() {
 	if [ ${#name_grep} -gt 0 ]; then return 0; else return 1; fi
 }
 
+namespace_exists() {
+	local ns="$1"
+	[ -d "/run/netns" ] || return 1
+	for nsall in "$(ls -1 /run/netns)"; do
+		if [ "$ns" = "$nsall" ]; then
+			return 0
+		fi
+	done
+	return 1
+}
+
+do_namespace() {
+	if [[ "$1" =~ ^([a-z]|[A-Z])+([0-9]|[a-z]|[A-Z])*$ ]]; then
+		namespace="$1"
+	else
+		die "Namespace validation failed!"
+	fi
+}
+
+do_netdev() {
+	if [[ "$1" =~ ^([a-z]|[A-Z])+([0-9]|[a-z]|[A-Z])*$ ]]; then
+		netdev="$1"
+	else
+		die "Netdev validation failed!"
+	fi
+}
+
+do_ip4() {
+	#ipv4 address must be provided in CIDR notation!
+	if [[ "$1" =~ ^(([0-9]|[1-9][0-9]|1([0-9]){2}|2[0-4][0-9]|25[0-5])\.){3}([0-9]|[1-9][0-9]|1([0-9]){2}|2[0-4][0-9]|25[0-5])\/([0-9]|[1-2][0-9]|3[0-2])$ ]]; then
+		ip4="$1"
+	else
+		die "Validation of ipv4 address failed! Note: CIDR notation is required."
+	fi
+}
+
+do_gw4() {
+	if [[ "$1" =~ ^(([0-9]|[1-9][0-9]|1([0-9]){2}|2[0-4][0-9]|25[0-5])\.){3}([0-9]|[1-9][0-9]|1([0-9]){2}|2[0-4][0-9]|25[0-5])$ ]]; then
+		gw4="$1"
+	else
+		die "Verification of the ipv4 gateway failed!"
+	fi
+}
+
+do_vpnrundir() {
+	if [ -d "$1" ]; then
+		vpndir="$1"
+	else
+		die "VPN authorization File does not exist!"
+	fi
+}
+
+do_vpnconfig() {
+	if [ -n "$vpndir" ]; then
+		if [ -f "$vpndir/$1" ]; then
+			vpnconfig="$1"
+			return
+		else
+			die "VPN configuration File does not exist!"
+		fi
+	elif [ -f "$1" ]; then
+		vpnconfig="$1"
+	else
+		die "VPN configuration File does not exist!"
+	fi
+}
+
+do_vpnauth() {
+	if [ -n "$vpndir" ]; then
+		if [ -f "$vpndir/$1" ]; then
+			vpnauth="$1"
+			return
+		else
+			die "VPN authorization File does not exist!"
+		fi
+	elif [ -f "$1" ]; then
+		vpnauth="$1"
+	else
+		die "VPN authorization File does not exist!"
+	fi
+}
+
+do_resolvconf() {
+	if [ -f "$1" ]; then
+		resolvconf="$1"
+	else
+		die "resolv.conf does not exist!"
+	fi
+}
+
+read_config() {
+	local config="$1"
+	[ -f "$config" ] || die "Configuration file \"$config\" invalid or missing!"
+	while read line; do
+		local k="$(echo "$line" | cut -d "=" -f1)"
+		local v="$(echo "$line" | cut -d "=" -f2)"
+		case "$k" in
+			NAMESPACE)	do_namespace "$v" ;;
+			NETDEV)	do_netdev "$v" ;;
+			IP4)	do_ip4 "$v" ;;
+			GW4) do_gw4 "$v" ;;
+			VPN_CONFIG) do_vpnconfig "$v" ;;
+			VPN_AUTH) do_vpnauth "$v" ;;
+			VPN_RUNDIR) do_vpnrundir "$v" ;;
+			RESOLV)	do_resolvconf "$v" ;;
+		esac
+	done < "$config"
+}
+
+dir_setup() {
+	if [ -e "$1" ]; then
+		[ -d "$1" ] || die "\"$1\" is not a directory!"
+	else
+		mkdir "$1"
+	fi
+}
+
+dir_isempty() {
+	[ -d "$1" ] || die "BUG: dir_isempty() expects a directory"
+	local e="$(ls -1q "$1" | wc -l)"
+	if [ "$e" -gt 0 ]; then
+		return 1
+	else
+		return 0
+	fi
+}
+
 network_setup() {
+	local ns="$1" #name of the namespace
+	local master="$2" #physical network device
+	local ip4="$3" #ipv4 address for the namespace's virtual interface in CIDR notation
+	local gw4="$4" #ipv4 gateway address for the namespace's virtual interface
+	local veth_ds="${ns}_ds" #virtual ethernet device @ default namespace
+	local veth_ns="${ns}_ns" #virtual ethernet device @ namespace $ns
+	[ -e "/run/netns/$ns" ] && die "vpn namespace already exists!"
+	ip netns add "$ns"
+	ip link add name "$veth_ds" type veth peer name "$veth_ns"
+	ip link set "$veth_ds" master "$master"
+	ip link set "$veth_ns" netns "$ns"
+	ip link set "$veth_ds" up
+	echo 1 > /proc/sys/net/ipv6/conf/"$veth_ds"/disable_ipv6
+	ip netns exec "$ns" ip addr add "$ip4" dev "$veth_ns"
+	ip netns exec "$ns" ip link set "$veth_ns" up
+	ip netns exec "$ns" ip link set lo up
+	ip netns exec "$ns" sysctl -w net.ipv6.conf.all.disable_ipv6=1
+	ip netns exec "$ns" ip route add default via "$gw4"
+}
 
-	test -e /run/netns/vpn && die "vpn namespace already exists!"
-	ip netns add vpn || die "could not create vpn namespace"
-	ip link add name veth1 type veth peer name veth2 || die "could not create veth devices"
-	ip link set veth1 master br0 || die "could not add veth device to bridge"
-	ip link set veth2 netns vpn || die "could not assign veth device to vpn namespace"
-	ip link set veth1 up || die "could not start veth device"
-	echo 1 > /proc/sys/net/ipv6/conf/veth1/disable_ipv6 || die "could not disable ipv6 in veth1 device"
-	ip netns exec vpn ip addr add 192.168.1.16/24 dev veth2 || die "could not assign an IP address to vpn namespace"
-	ip netns exec vpn ip link set veth2 up || die "could not start veth device in vpn namespace"
-	ip netns exec vpn ip link set lo up || die "could not start loopback device in vpn namespace"
-	ip netns exec vpn sysctl -w net.ipv6.conf.all.disable_ipv6=1 || die "could not disable ipv6 in vpn namespace"
-	ip netns exec vpn ip route add default via 192.168.1.254 || die "could not add default route to vpn namespace"
-
-
+dns_setup() {
+	[ "$#" -lt 2 ] && die "BUG: Function dns_setup() needs 2 arguments!"
+	local ns="$1"
+	local resolv="$2"
+	[ ! -e "/etc/netns/${ns}" ] && mkdir -p "/etc/netns/${ns}"
+	cp "$resolv" "/etc/netns/${ns}/resolv.conf"
 }
 
 vpn_setup() {
-	local olddir=`pwd`
-	test -d "$VPN_CONF_DIR" || die "VPN_CONF_DIR \"$VPN_CONF_DIR\" is not a valid directory!"
-	test -f "$VPN_AUTH" || die "VPN_AUTH \"$VPN_AUTH\" is not a file!"
-	cd "$VPN_CONF_DIR" || die "could not change into the VPN configuration directory"
-	select VPN_CONF_FILE in *.ovpn
-	do
-		ip netns exec vpn openvpn --daemon --writepid "$OPENVPN_PID_FILE" --config "$VPN_CONF_FILE" --auth-user-pass "$VPN_AUTH" || die "could not launch openvpn"
-		break
+	local ns="$1"
+	local cfile="$2" #openvpn config file (*.ovpn)
+	local authfile="$3"
+	local rundir="$4"
+	local pidfile="${piddir}/${ns}.pid"
+	[ -z "$piddir" ] && die "BUG: The pid directory must exist before calling vpn_setup()!"
+	[ -e "$pidfile" ] && die "This VPN seems to be already running!"
+	local execstr="ip netns exec $(printf %q "$ns") openvpn"
+	[ -n "$rundir" ] && execstr="$execstr --cd $(printf %q "$rundir")"
+	execstr="$execstr --daemon --writepid $(printf %q "$pidfile") --config $(printf %q "$cfile") --auth-user-pass $(printf %q "$authfile")"
+	eval "$execstr"
+}
+
+vpn_terminate() {
+	local ns="$1"
+	local pidfile="${piddir}/${ns}.pid"
+	[ -f "$pidfile" ] || die "Cannot terminate VPN in namespace \"$ns\": No pid file found!"
+	kill -SIGTERM "$(cat "$pidfile")"
+	rm "$pidfile"
+}
+
+dns_terminate() {
+	local ns="$1"
+	[ -z "$ns" ] && die "BUG: dns_terminate() needs a namespace argument."
+	local rs="/etc/netns/${ns}/resolv.conf"
+	[ -f "$rs" ] && rm "$rs"
+}
+
+network_terminate() {
+	local ns="$1"
+	local veth_ds="${ns}_ds" #virtual ethernet device @ default namespace
+	local veth_ns="${ns}_ns" #virtual ethernet device @ namespace $ns
+	local pidfile="${piddir}/${ns}.pid"
+	[ -f "$pidfile" ] && die "BUG: VPN is still running in namespace \"$ns\"!"
+	ip netns exec "$ns" ip link set "$veth_ns" down
+	ip link set "$veth_ds" down
+	ip link delete "$veth_ds"
+	ip netns del "$ns"
+}
+
+command_run() {
+	local ns="$1"
+	[ -z "$1" ] && die "command_run() must be called with a namespace identifier as the first argument!"
+	local user=""
+	local cmd=""
+	local bg=1
+	shift
+	namespace_exists "$ns" || die "Namespace \"$ns\" not found!"
+	while [ "$#" -gt 0 ]; do
+		if [ "$1" = "-u" -o "$1" = "--user" ]; then
+			[  -z "$2" ] && die "Switch $1 needs a username as argument!"
+			user="$2"
+			shift
+		elif [ "$1" = "-b" -o "$1" = "--background" ]; then
+			bg=0
+		else
+			cmd="$@"
+			break
+		fi
+		shift
 	done
-	cd "$olddir"
+	
+	local command_string=""
+	for s in "$@"; do
+		if [ -z "$command_string" ]; then
+			command_string="$(printf %q $s)"
+		else
+			command_string="$command_string $(printf %q $s)"
+		fi
+	done
+	
+	local netns_command="ip netns exec $(printf %q "$ns")"
+	if [ -n "$user" ]; then
+		does_user_exist "$user" || die "user \"$user\" does not exist!"
+		netns_command="$netns_command runuser -u $(printf %q "$user")"
+		#nohup ip netns exec "$ns" runuser -u "$user" $command_string &> /dev/null &
+		#disown
+	fi
+	
+	netns_command="$netns_command $command_string"
+	
+	[ "$bg" -eq 0 ] && netns_command="nohup $netns_command &> /dev/null &"
+	
+	eval "$netns_command"
+	
+	[ "$bg" -eq 0 ] && disown
 }
 
-run_in_vpn_as() {
-	#$1 -> user the command will run under
-	#$2 -> command to be run in vpn namespace
-	does_user_exist "$1" || die "user \"$1\" does not exist!"
-	screen ip netns exec vpn runuser -u "$1" "$2"
+main() {
+	set -e
+	if [ -z "$1" ]; then
+		echo "No command given!"
+		return 0
+	fi
+	case "$1" in
+		start)
+			read_config "$2"
+			network_setup "$namespace" "$netdev" "$ip4" "$gw4"
+			dns_setup "$namespace" "$resolvconf"
+			dir_setup "$rundir"
+			dir_setup "$piddir"
+			vpn_setup "$namespace" "$vpnconfig" "$vpnauth" "$vpndir"
+			;;
+		stop)
+			read_config "$2"
+			vpn_terminate "$namespace"
+			dns_terminate "$namespace"
+			network_terminate "$namespace"
+			dir_isempty "$piddir" && rmdir "$piddir"
+			dir_isempty "$rundir" && rmdir "$rundir"
+			;;
+		list)
+			if [ -d "$piddir" ]; then
+				shopt -s nullglob
+				for f in "$piddir"; do
+					echo "${f%.pid}"
+				done
+				shopt -u nullglob
+			fi
+			;;
+		run)
+			shift
+			command_run "$@"
+			;;
+		*)
+			echo "$1: Unknown command!"
+	esac
 }
 
-if [ -f "$OPENVPN_PID_FILE" ]
-	then
-		for i in `pidof openvpn`
-			do
-				if [[ "$i" == $(cat "$OPENVPN_PID_FILE") ]]
-					then
-						run_in_vpn_as "$1" "$2"
-						break
-				fi
-			done
-		
-	else
-		network_setup
-		vpn_setup
-		run_in_vpn_as "$1" "$2"
-fi
+main "$@"
 

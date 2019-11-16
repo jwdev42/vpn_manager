@@ -1,0 +1,3 @@
+0.2:
+-Introduction of 3 commands: run,start,stop.
+-Configuration parameters for the script are now read from a file.
