@@ -35,7 +35,7 @@ check_mandatory_config_options() {
 
 does_user_exist() {
 	#$1 -> user to check
-	local name_grep=$(cut -d ":" -f 1 /etc/passwd | grep "^$1\$")
+	local name_grep="$(cut -d ":" -f 1 /etc/passwd | grep "^$1\$")"
 	if [ ${#name_grep} -gt 0 ]; then return 0; else return 1; fi
 }
 
