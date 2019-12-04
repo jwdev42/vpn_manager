@@ -1,3 +1,0 @@
--stop function needs to check if any programs are still running in the namespace
-before terminating openvpn and deleting the namespace.
--check if all mandatory keys are present in the config file

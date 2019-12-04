@@ -1,7 +1,7 @@
 #! /usr/bin/env bash
 
 #
-# Version 0.2, ©2019 Jörg Walter
+# Version 0.3, ©2019 Jörg Walter
 # License: GPL-3
 #
 
@@ -15,7 +15,7 @@ netdev="" #the network bridge's device name, mandatory.
 ip4="" #local IPv4 address for the network namespace, mandatory.
 gw4="" #local IPv4 gateway, mandatory.
 vpnconfig="" #Path to a *.ovpn config file, mandatory.
-vpnauth="" #Path to an auth-user-pass file, mandatory.
+vpnauth="" #Path to an auth-user-pass file, optional.
 vpndir="" #Directory openvpn will switch to, optional.
 resolvconf="" #Path to a resolv.conf file that will be copied to the network namespace, optional.
 
@@ -23,6 +23,14 @@ resolvconf="" #Path to a resolv.conf file that will be copied to the network nam
 die() {
 	printf "$(tput setaf 1)DIE: $1$(tput sgr0)\n"
 	exit 1
+}
+
+check_mandatory_config_options() {
+	[ -n "$namespace" ] || die "The NAMESPACE variable is missing in the configuration file!"
+	[ -n "$netdev" ] || die "The NETDEV variable is missing in the configuration file!"
+	[ -n "$ip4" ] || die "The IP4 variable is missing in the configuration file!"
+	[ -n "$gw4" ] || die "The GW4 variable is missing in the configuration file!"
+	[ -n "$vpnconfig" ] || die "The VPN_CONFIG variable is missing in the configuration file!"
 }
 
 does_user_exist() {
@@ -196,9 +204,17 @@ vpn_setup() {
 	[ -z "$piddir" ] && die "BUG: The pid directory must exist before calling vpn_setup()!"
 	[ -e "$pidfile" ] && die "This VPN seems to be already running!"
 	local execstr="ip netns exec $(printf %q "$ns") openvpn"
-	[ -n "$rundir" ] && execstr="$execstr --cd $(printf %q "$rundir")"
+	[ -z "$rundir" ] || execstr="$execstr --cd $(printf %q "$rundir")"
 	execstr="$execstr --daemon --writepid $(printf %q "$pidfile") --config $(printf %q "$cfile") --auth-user-pass $(printf %q "$authfile")"
 	eval "$execstr"
+}
+
+pre_vpn_terminate() {
+	local ns="$1"
+	local pids=( $(ip netns pids "$ns") )
+	if [ ${#pids[@]} -gt 1 ]; then
+		die "Cannot remove Namespace \"$ns\" due to running processes!"
+	fi
 }
 
 vpn_terminate() {
@@ -285,27 +301,29 @@ main() {
 	case "$1" in
 		start)
 			read_config "$2"
+			check_mandatory_config_options
 			network_setup "$namespace" "$netdev" "$ip4" "$gw4"
-			dns_setup "$namespace" "$resolvconf"
+			[ -z "$resolvconf" ] || dns_setup "$namespace" "$resolvconf"
 			dir_setup "$rundir"
 			dir_setup "$piddir"
 			vpn_setup "$namespace" "$vpnconfig" "$vpnauth" "$vpndir"
 			;;
 		stop)
 			read_config "$2"
+			check_mandatory_config_options
+			pre_vpn_terminate "$namespace"
 			vpn_terminate "$namespace"
-			dns_terminate "$namespace"
+			[ -z "$resolvconf" ] || dns_terminate "$namespace"
 			network_terminate "$namespace"
 			dir_isempty "$piddir" && rmdir "$piddir"
 			dir_isempty "$rundir" && rmdir "$rundir"
 			;;
 		list)
 			if [ -d "$piddir" ]; then
-				shopt -s nullglob
-				for f in "$piddir"; do
-					echo "${f%.pid}"
+				for f in "$piddir"/*; do
+					local g="$(basename "$f")"
+					echo "${g%.pid}"
 				done
-				shopt -u nullglob
 			fi
 			;;
 		run)
