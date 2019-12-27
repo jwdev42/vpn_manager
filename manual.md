@@ -79,4 +79,8 @@ vpn_manager **run** _NAMESPACE \[-u|--user USER\] \[-b|--background\] COMMAND_
 \-u, \-\-user _USER_: Run _COMMAND_ as user _USER_.  
 \-b, \-\-background: Run _COMMAND_ in the background and detach it from the shell.
 
+## Known issues
+
+- If *systemd-resolved* is running, the name resolution of programs that are aware of *systemd-resolved* will fail inside of network namespaces.
+
 © 2019 Jörg Walter
