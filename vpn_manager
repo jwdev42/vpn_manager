@@ -5,19 +5,19 @@
 # License: GPL-3
 #
 
-rundir="/run/vpn_manager"
-piddir="${rundir}/pid"
+vpnm_rundir="/run/vpn_manager"
+vpnm_piddir="${vpnm_rundir}/pid"
 
 
 #DO NOT EDIT:
-namespace="" #the network namespace the vpn will run in, mandatory.
-netdev="" #the network bridge's device name, mandatory.
-ip4="" #local IPv4 address for the network namespace, mandatory.
-gw4="" #local IPv4 gateway, mandatory.
-vpnconfig="" #Path to a *.ovpn config file, mandatory.
-vpnauth="" #Path to an auth-user-pass file, optional.
-vpndir="" #Directory openvpn will switch to, optional.
-resolvconf="" #Path to a resolv.conf file that will be copied to the network namespace, optional.
+vpnm_namespace="" #the network namespace the vpn will run in, mandatory.
+vpnm_netdev="" #the network bridge's device name, mandatory.
+vpnm_ip4="" #local IPv4 address for the network namespace, mandatory.
+vpnm_gw4="" #local IPv4 gateway, mandatory.
+vpnm_vpnconfig="" #Path to a *.ovpn config file, mandatory.
+vpnm_vpnauth="" #Path to an auth-user-pass file, optional.
+vpnm_vpndir="" #Directory openvpn will switch to, optional.
+vpnm_resolvconf="" #Path to a resolv.conf file that will be copied to the network namespace, optional.
 
 
 die() {
@@ -26,11 +26,11 @@ die() {
 }
 
 check_mandatory_config_options() {
-	[ -n "$namespace" ] || die "The NAMESPACE variable is missing in the configuration file!"
-	[ -n "$netdev" ] || die "The NETDEV variable is missing in the configuration file!"
-	[ -n "$ip4" ] || die "The IP4 variable is missing in the configuration file!"
-	[ -n "$gw4" ] || die "The GW4 variable is missing in the configuration file!"
-	[ -n "$vpnconfig" ] || die "The VPN_CONFIG variable is missing in the configuration file!"
+	[ -n "$vpnm_namespace" ] || die "The NAMESPACE variable is missing in the configuration file!"
+	[ -n "$vpnm_netdev" ] || die "The NETDEV variable is missing in the configuration file!"
+	[ -n "$vpnm_ip4" ] || die "The IP4 variable is missing in the configuration file!"
+	[ -n "$vpnm_gw4" ] || die "The GW4 variable is missing in the configuration file!"
+	[ -n "$vpnm_vpnconfig" ] || die "The VPN_CONFIG variable is missing in the configuration file!"
 }
 
 does_user_exist() {
@@ -52,7 +52,7 @@ namespace_exists() {
 
 do_namespace() {
 	if [[ "$1" =~ ^([a-z]|[A-Z])+([0-9]|[a-z]|[A-Z])*$ ]]; then
-		namespace="$1"
+		vpnm_namespace="$1"
 	else
 		die "Namespace validation failed!"
 	fi
@@ -60,7 +60,7 @@ do_namespace() {
 
 do_netdev() {
 	if [[ "$1" =~ ^([a-z]|[A-Z])+([0-9]|[a-z]|[A-Z])*$ ]]; then
-		netdev="$1"
+		vpnm_netdev="$1"
 	else
 		die "Netdev validation failed!"
 	fi
@@ -69,7 +69,7 @@ do_netdev() {
 do_ip4() {
 	#ipv4 address must be provided in CIDR notation!
 	if [[ "$1" =~ ^(([0-9]|[1-9][0-9]|1([0-9]){2}|2[0-4][0-9]|25[0-5])\.){3}([0-9]|[1-9][0-9]|1([0-9]){2}|2[0-4][0-9]|25[0-5])\/([0-9]|[1-2][0-9]|3[0-2])$ ]]; then
-		ip4="$1"
+		vpnm_ip4="$1"
 	else
 		die "Validation of ipv4 address failed! Note: CIDR notation is required."
 	fi
@@ -77,7 +77,7 @@ do_ip4() {
 
 do_gw4() {
 	if [[ "$1" =~ ^(([0-9]|[1-9][0-9]|1([0-9]){2}|2[0-4][0-9]|25[0-5])\.){3}([0-9]|[1-9][0-9]|1([0-9]){2}|2[0-4][0-9]|25[0-5])$ ]]; then
-		gw4="$1"
+		vpnm_gw4="$1"
 	else
 		die "Verification of the ipv4 gateway failed!"
 	fi
@@ -85,37 +85,37 @@ do_gw4() {
 
 do_vpnrundir() {
 	if [ -d "$1" ]; then
-		vpndir="$1"
+		vpnm_vpndir="$1"
 	else
 		die "VPN authorization File does not exist!"
 	fi
 }
 
 do_vpnconfig() {
-	if [ -n "$vpndir" ]; then
-		if [ -f "$vpndir/$1" ]; then
-			vpnconfig="$1"
+	if [ -n "$vpnm_vpndir" ]; then
+		if [ -f "$vpnm_vpndir/$1" ]; then
+			vpnm_vpnconfig="$1"
 			return
 		else
 			die "VPN configuration File does not exist!"
 		fi
 	elif [ -f "$1" ]; then
-		vpnconfig="$1"
+		vpnm_vpnconfig="$1"
 	else
 		die "VPN configuration File does not exist!"
 	fi
 }
 
 do_vpnauth() {
-	if [ -n "$vpndir" ]; then
-		if [ -f "$vpndir/$1" ]; then
-			vpnauth="$1"
+	if [ -n "$vpnm_vpndir" ]; then
+		if [ -f "$vpnm_vpndir/$1" ]; then
+			vpnm_vpnauth="$1"
 			return
 		else
 			die "VPN authorization File does not exist!"
 		fi
 	elif [ -f "$1" ]; then
-		vpnauth="$1"
+		vpnm_vpnauth="$1"
 	else
 		die "VPN authorization File does not exist!"
 	fi
@@ -123,7 +123,7 @@ do_vpnauth() {
 
 do_resolvconf() {
 	if [ -f "$1" ]; then
-		resolvconf="$1"
+		vpnm_resolvconf="$1"
 	else
 		die "resolv.conf does not exist!"
 	fi
@@ -200,8 +200,8 @@ vpn_setup() {
 	local cfile="$2" #openvpn config file (*.ovpn)
 	local authfile="$3"
 	local rundir="$4"
-	local pidfile="${piddir}/${ns}.pid"
-	[ -z "$piddir" ] && die "BUG: The pid directory must exist before calling vpn_setup()!"
+	local pidfile="${vpnm_piddir}/${ns}.pid"
+	[ -z "$vpnm_piddir" ] && die "BUG: The pid directory must exist before calling vpn_setup()!"
 	[ -e "$pidfile" ] && die "This VPN seems to be already running!"
 	local execstr="ip netns exec $(printf %q "$ns") openvpn"
 	[ -z "$rundir" ] || execstr="$execstr --cd $(printf %q "$rundir")"
@@ -219,7 +219,7 @@ pre_vpn_terminate() {
 
 vpn_terminate() {
 	local ns="$1"
-	local pidfile="${piddir}/${ns}.pid"
+	local pidfile="${vpnm_piddir}/${ns}.pid"
 	[ -f "$pidfile" ] || die "Cannot terminate VPN in namespace \"$ns\": No pid file found!"
 	kill -SIGTERM "$(cat "$pidfile")"
 	rm "$pidfile"
@@ -236,7 +236,7 @@ network_terminate() {
 	local ns="$1"
 	local veth_ds="${ns}_ds" #virtual ethernet device @ default namespace
 	local veth_ns="${ns}_ns" #virtual ethernet device @ namespace $ns
-	local pidfile="${piddir}/${ns}.pid"
+	local pidfile="${vpnm_piddir}/${ns}.pid"
 	[ -f "$pidfile" ] && die "BUG: VPN is still running in namespace \"$ns\"!"
 	ip netns exec "$ns" ip link set "$veth_ns" down
 	ip link set "$veth_ds" down
@@ -302,25 +302,25 @@ main() {
 		start)
 			read_config "$2"
 			check_mandatory_config_options
-			network_setup "$namespace" "$netdev" "$ip4" "$gw4"
-			[ -z "$resolvconf" ] || dns_setup "$namespace" "$resolvconf"
-			dir_setup "$rundir"
-			dir_setup "$piddir"
-			vpn_setup "$namespace" "$vpnconfig" "$vpnauth" "$vpndir"
+			network_setup "$vpnm_namespace" "$vpnm_netdev" "$vpnm_ip4" "$vpnm_gw4"
+			[ -z "$vpnm_resolvconf" ] || dns_setup "$vpnm_namespace" "$vpnm_resolvconf"
+			dir_setup "$vpnm_rundir"
+			dir_setup "$vpnm_piddir"
+			vpn_setup "$vpnm_namespace" "$vpnm_vpnconfig" "$vpnm_vpnauth" "$vpnm_vpndir"
 			;;
 		stop)
 			read_config "$2"
 			check_mandatory_config_options
-			pre_vpn_terminate "$namespace"
-			vpn_terminate "$namespace"
-			[ -z "$resolvconf" ] || dns_terminate "$namespace"
-			network_terminate "$namespace"
-			dir_isempty "$piddir" && rmdir "$piddir"
-			dir_isempty "$rundir" && rmdir "$rundir"
+			pre_vpn_terminate "$vpnm_namespace"
+			vpn_terminate "$vpnm_namespace"
+			[ -z "$vpnm_resolvconf" ] || dns_terminate "$vpnm_namespace"
+			network_terminate "$vpnm_namespace"
+			dir_isempty "$vpnm_piddir" && rmdir "$vpnm_piddir"
+			dir_isempty "$vpnm_rundir" && rmdir "$vpnm_rundir"
 			;;
 		list)
-			if [ -d "$piddir" ]; then
-				for f in "$piddir"/*; do
+			if [ -d "$vpnm_piddir" ]; then
+				for f in "$vpnm_piddir"/*; do
 					local g="$(basename "$f")"
 					echo "${g%.pid}"
 				done
