@@ -1,15 +1,17 @@
 #! /usr/bin/env bash
 
 #
-# Version 0.3, ©2019 Jörg Walter
+# Version 0.3, ©2020 Jörg Walter
 # License: GPL-3
 #
 
+vpnm_configdir="/etc/vpn_manager"
 vpnm_rundir="/run/vpn_manager"
 vpnm_piddir="${vpnm_rundir}/pid"
 
 
 #DO NOT EDIT:
+vpnm_configfile=""
 vpnm_namespace="" #the network namespace the vpn will run in, mandatory.
 vpnm_netdev="" #the network bridge's device name, mandatory.
 vpnm_ip4="" #local IPv4 address for the network namespace, mandatory.
@@ -129,6 +131,17 @@ do_resolvconf() {
 	fi
 }
 
+get_config() {
+	local configdir="$1"
+	local ns="$2"
+	[ -d "$configdir" ] || die "$0: \"$configdir\" is not a directory!"
+	[ -n "$ns" ] || die "$0: No namespace passed!"
+	local configfile="${configdir}/${ns}.conf"
+	[ -e "$configfile" ] || die "$0: Configuration file \"$configfile\" does not exist!"
+	do_namespace "$ns"
+	vpnm_configfile="$configfile"
+}
+
 read_config() {
 	local config="$1"
 	[ -f "$config" ] || die "Configuration file \"$config\" invalid or missing!"
@@ -136,7 +149,6 @@ read_config() {
 		local k="$(echo "$line" | cut -d "=" -f1)"
 		local v="$(echo "$line" | cut -d "=" -f2)"
 		case "$k" in
-			NAMESPACE)	do_namespace "$v" ;;
 			NETDEV)	do_netdev "$v" ;;
 			IP4)	do_ip4 "$v" ;;
 			GW4) do_gw4 "$v" ;;
@@ -300,7 +312,8 @@ main() {
 	fi
 	case "$1" in
 		start)
-			read_config "$2"
+			get_config "$vpnm_configdir" "$2"
+			read_config "$vpnm_configfile"
 			check_mandatory_config_options
 			network_setup "$vpnm_namespace" "$vpnm_netdev" "$vpnm_ip4" "$vpnm_gw4"
 			[ -z "$vpnm_resolvconf" ] || dns_setup "$vpnm_namespace" "$vpnm_resolvconf"
@@ -309,7 +322,8 @@ main() {
 			vpn_setup "$vpnm_namespace" "$vpnm_vpnconfig" "$vpnm_vpnauth" "$vpnm_vpndir"
 			;;
 		stop)
-			read_config "$2"
+			get_config "$vpnm_configdir" "$2"
+			read_config "$vpnm_configfile"
 			check_mandatory_config_options
 			pre_vpn_terminate "$vpnm_namespace"
 			vpn_terminate "$vpnm_namespace"
