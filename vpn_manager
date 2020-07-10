@@ -1,7 +1,7 @@
 #! /usr/bin/env bash
 
 #
-# Version 0.3, ©2020 Jörg Walter
+# Version 0.3.1, ©2020 Jörg Walter
 # License: GPL-3
 #
 
@@ -316,6 +316,7 @@ main() {
 			read_config "$vpnm_configfile"
 			check_mandatory_config_options
 			network_setup "$vpnm_namespace" "$vpnm_netdev" "$vpnm_ip4" "$vpnm_gw4"
+			sleep 1
 			[ -z "$vpnm_resolvconf" ] || dns_setup "$vpnm_namespace" "$vpnm_resolvconf"
 			dir_setup "$vpnm_rundir"
 			dir_setup "$vpnm_piddir"
